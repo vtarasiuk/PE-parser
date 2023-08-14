@@ -33,86 +33,67 @@ int main(int argc, char* argv[])
 	// signature - this is PE file 
 	// Optional Header (Image Only) determines whether it is PE32 or PE32+
 
-	const DWORD dwfileSize = GetFileSize(peFileHandle, NULL);
-	if (dwfileSize == INVALID_FILE_SIZE)
-	{
-		cerr << "Eror: " << GetLastError() << endl;
-		CloseHandle(peFileHandle);
-		exit(EXIT_FAILURE);
-	}
-	char* rawFile = new char[dwfileSize + 1];
-	if (rawFile == NULL)
-	{
-		cerr << "Error while memory allocation" << endl;
-		CloseHandle(peFileHandle);
-		exit(EXIT_FAILURE);
-	}
-
+	IMAGE_DOS_HEADER dosHeader = { 0 };
 	DWORD bytesWritten = 0;
-	if (!ReadFile(peFileHandle, rawFile, dwfileSize, &bytesWritten, NULL)) // bytesReads
+
+	if (!ReadFile(peFileHandle, &dosHeader, sizeof(IMAGE_DOS_HEADER), &bytesWritten, NULL))
 	{
-		cerr << "Error: " << GetLastError() << endl;
-		delete[] rawFile;
+		cerr << "Error reading the DOS header: " << GetLastError() << endl;
 		CloseHandle(peFileHandle);
 		exit(EXIT_FAILURE);
 	}
+	
 	cout << "BytesRead: " << bytesWritten << endl;
 
-	if (rawFile[0] != 'M' && rawFile[1] != 'Z') // validating a file !!! size of the file careful
+	if (dosHeader.e_magic != IMAGE_DOS_SIGNATURE)
 	{
-		cerr << "Error: this is not a valid file" << endl;
-		delete[] rawFile;
+		cerr << "Error: this is not a valid PE file" << endl;
 		CloseHandle(peFileHandle);
 		exit(EXIT_FAILURE);
 	}
 
-	DWORD peHeaderPointer = SetFilePointer(peFileHandle, 0x3C, NULL, FILE_BEGIN);
-	if (peHeaderPointer == INVALID_SET_FILE_POINTER)
-	{
-		cerr << "Error: " << GetLastError() << endl;
-		delete[] rawFile;
-		CloseHandle(peFileHandle);
-		exit(EXIT_FAILURE);
-	}
-	cout << "peHeader = " << peHeaderPointer << endl;
-
-	DWORD peHeaderOffset;
-	if (!ReadFile(peFileHandle, &peHeaderOffset, sizeof(peHeaderOffset), &bytesWritten, NULL) || bytesWritten != 4)
-	{
-		cerr << "Error: " << GetLastError() << endl;
-		delete[] rawFile;
-		CloseHandle(peFileHandle);
-		exit(EXIT_FAILURE);
-	}
+	DWORD peHeaderOffset = dosHeader.e_lfanew;
 
 	cout << "pe header offset: " << peHeaderOffset << endl;
 
 	// Seek to the PE header offset and read the PE header
 	if (SetFilePointer(peFileHandle, peHeaderOffset, NULL, FILE_BEGIN) == INVALID_SET_FILE_POINTER)
 	{
-		cerr << "Error: " << GetLastError() << endl;
-		delete[] rawFile;
+		cerr << "Error changing file pointer: " << GetLastError() << endl;
+		CloseHandle(peFileHandle);
+		exit(EXIT_FAILURE);
+	}
+	
+	DWORD ntSignature = 0;
+	if (!ReadFile(peFileHandle, &ntSignature, sizeof(DWORD), &bytesWritten, NULL))
+	{
+		cerr << "Error reading IMAGE_NT_SIGNATURE: " << GetLastError() << endl;
 		CloseHandle(peFileHandle);
 		exit(EXIT_FAILURE);
 	}
 
-	DWORD peSignature;
-	ReadFile(peFileHandle, &peSignature, sizeof(peSignature), &bytesWritten, NULL);
-
-	if (peSignature != 0x00004550) // PE/0/0 note: https://www.gdatasoftware.com/blog/pebitnesstrick
+	if (ntSignature != IMAGE_NT_SIGNATURE) // note: https://www.gdatasoftware.com/blog/pebitnesstrick
 	{
-		cerr << "Error: this file isn't PE file format" << endl;
-		// ... another cleaning
+		cerr << "Error: this is not a valid PE file" << endl;
+		CloseHandle(peFileHandle);
+		exit(EXIT_FAILURE);
 	}
 
-	WORD machineType;
-	ReadFile(peFileHandle, &machineType, sizeof(machineType), &bytesWritten, NULL);
-	cout << "Type: " << hex << machineType << dec << endl;
-	if (machineType == IMAGE_FILE_MACHINE_AMD64)
+	IMAGE_FILE_HEADER fileHeader = { 0 };
+	if (!ReadFile(peFileHandle, &fileHeader, sizeof(IMAGE_FILE_HEADER), &bytesWritten, NULL))
+	{
+		cerr << "Error reading IMAGE_FILE_HEADER: " << GetLastError() << endl;
+		CloseHandle(peFileHandle);
+		exit(EXIT_FAILURE);
+	}
+	
+	cout << "Type: " << fileHeader.Machine << endl;
+	
+	if (fileHeader.Machine == IMAGE_FILE_MACHINE_AMD64)
 	{
 		cout << "64-bit pe file" << endl;
 	}
-	else if (machineType == IMAGE_FILE_MACHINE_I386)
+	else if (fileHeader.Machine == IMAGE_FILE_MACHINE_I386)
 	{
 		cout << "32-bit pe file" << endl;
 	}
@@ -122,6 +103,5 @@ int main(int argc, char* argv[])
 	}
 
 	cout << "Header closed: " << CloseHandle(peFileHandle) << endl;
-	delete[] rawFile;
 	return EXIT_SUCCESS;
 }
