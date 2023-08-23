@@ -1,124 +1,139 @@
 #include <iostream>
-#include <Windows.h>
+#include <windows.h>
+#include <exception>
 
 using namespace std;
 
-#define PE_FILES {"./assets/cmmon32.exe", "./assets/kernel32.dll", "./assets/peparser.dll"}
-
-#ifdef PRINT_INFO
-#include "DebugInfo.h"
-#endif
-
-int main(int argc, char* argv[])
+/*
+typedef struct
 {
-	//if (argc != 2)
-	//{
-	//	printf("Usage: %s <PEFilePath>\n", argv[0]);
-	//	return EXIT_FAILURE;
-	//}
+  HANDLE Handle;
+  HANDLE Mapping;
+  LPVOID Content;
+} PEFile;
+*/
 
-	const char* peFiles[] = PE_FILES;
+// PEFile* Open_and_Map_File(PEFile *file, const LPBYTE filePath);
 
-	cout << "Enter file index: ";
-	int fileIndex;
-	cin >> fileIndex;
+int main()
+{
+  const char* filePath = "./assets/peparser.dll";
+  HANDLE hPeFile = CreateFileA(filePath, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+  if (hPeFile == INVALID_HANDLE_VALUE) cout << "Error 1" << endl;
+  HANDLE hPeFileMapping = CreateFileMappingA(hPeFile, NULL, PAGE_READWRITE, 0, 0, NULL);
+  if (hPeFileMapping == NULL) cout << "Error 2" << endl;
+  LPVOID peFileContent = MapViewOfFile(hPeFileMapping, FILE_MAP_READ, 0, 0, 0);
+  if (peFileContent == NULL) cout << "Error 3" << endl;
 
-	const char* peFilePath = peFiles[fileIndex];
-	HANDLE peFileHandle = CreateFileA(peFilePath, GENERIC_READ | GENERIC_WRITE,
-		0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+  PIMAGE_DOS_HEADER peFileDOSHeader = (PIMAGE_DOS_HEADER)peFileContent;
+  PIMAGE_FILE_HEADER peFileHeader = (PIMAGE_FILE_HEADER)((BYTE*)peFileContent + peFileDOSHeader->e_lfanew + sizeof(DWORD));
+  cout << "File Header" << endl;
+  cout << hex << peFileHeader->Machine << endl;
+  cout << dec << peFileHeader->NumberOfSections << endl;
+  cout << dec << peFileHeader->SizeOfOptionalHeader << endl << endl;
+  PIMAGE_OPTIONAL_HEADER64 peFileOptionalHeader = (PIMAGE_OPTIONAL_HEADER64)((BYTE*)peFileHeader + sizeof(IMAGE_FILE_HEADER));
+  cout << "Optional Header" << endl;
+  cout << hex << peFileOptionalHeader->Magic << endl;
+  cout << hex << peFileOptionalHeader->DataDirectory[1].VirtualAddress << endl;
+  cout << dec << peFileOptionalHeader->SizeOfHeaders << endl;
 
-	if (peFileHandle == INVALID_HANDLE_VALUE)
-	{
-		cerr << "Can't open file " << peFilePath << "\nError: " << GetLastError() << endl;
-		exit(EXIT_FAILURE); // what is exit function itself
-	}
 
-	IMAGE_DOS_HEADER dosHeader = { 0 };
-	DWORD bytesWritten = 0;
+  PIMAGE_SECTION_HEADER peFileSectionHeaders = (PIMAGE_SECTION_HEADER)((BYTE*)peFileOptionalHeader + peFileHeader->SizeOfOptionalHeader);
 
-	if (!ReadFile(peFileHandle, &dosHeader, sizeof(IMAGE_DOS_HEADER), &bytesWritten, NULL))
-	{
-		cerr << "Error reading the DOS header: " << GetLastError() << endl;
-		CloseHandle(peFileHandle);
-		exit(EXIT_FAILURE);
-	}
 
-	if (dosHeader.e_magic != IMAGE_DOS_SIGNATURE)
-	{
-		cerr << "Error: this is not a valid PE file" << endl;
-		CloseHandle(peFileHandle);
-		exit(EXIT_FAILURE);
-	}
+  DWORD importTableVirtualAddress = peFileOptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress; // temp
+  BYTE importTableSectionIndex = 0;
+  for (WORD i = 0; i < peFileHeader->NumberOfSections; i++)
+  {
+    IMAGE_SECTION_HEADER sectionHeader = peFileSectionHeaders[i];
+    cout << sectionHeader.Name << endl;
+    cout << hex;
+    cout << "  Virtual Address: " << sectionHeader.VirtualAddress << endl;
+    cout << "  Virtual Size: " << sectionHeader.Misc.VirtualSize << endl;
+    cout << "  Pointer to raw data: " << sectionHeader.PointerToRawData << endl;
+    cout << "  Size of raw data: " << sectionHeader.SizeOfRawData << endl;
 
-	DWORD peHeaderOffset = dosHeader.e_lfanew;
+    if (importTableVirtualAddress > sectionHeader.VirtualAddress && importTableVirtualAddress < sectionHeader.VirtualAddress + sectionHeader.Misc.VirtualSize)
+    {
+      importTableSectionIndex = i;
+    }
+  }
 
-	cout << "pe header offset: " << peHeaderOffset << endl;
+  cout << "Import table VA: " << peFileOptionalHeader->DataDirectory[1].VirtualAddress << endl;
+  cout << "Import table is located in " << peFileSectionHeaders[importTableSectionIndex].Name << " section" << endl;
 
-	// Seek to the PE header offset and read the PE header
-	if (SetFilePointer(peFileHandle, peHeaderOffset, NULL, FILE_BEGIN) == INVALID_SET_FILE_POINTER)
-	{
-		cerr << "Error changing file pointer: " << GetLastError() << endl;
-		CloseHandle(peFileHandle);
-		exit(EXIT_FAILURE);
-	}
+  DWORD importTableRVA = peFileOptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
+  DWORD sectionOfImportTableRVA = peFileSectionHeaders[importTableSectionIndex].VirtualAddress;
+  DWORD rawDataPointerImportTableSection = peFileSectionHeaders[importTableSectionIndex].PointerToRawData;
 
-	DWORD peFileSignature = 0;
-	if (!ReadFile(peFileHandle, &peFileSignature, sizeof(DWORD), &bytesWritten, NULL))
-	{
-		cerr << "Error reading IMAGE_NT_SIGNATURE: " << GetLastError() << endl;
-		CloseHandle(peFileHandle);
-		exit(EXIT_FAILURE);
-	}
+  DWORD rawOffsetToImportTable = importTableRVA - sectionOfImportTableRVA + rawDataPointerImportTableSection;
+  cout << "rawOffsetToImportDescriptor: " << rawOffsetToImportTable << endl;
 
-	if (peFileSignature != IMAGE_NT_SIGNATURE) // note: https://www.gdatasoftware.com/blog/pebitnesstrick
-	{
-		cerr << "Error: this is not a valid PE file" << endl;
-		CloseHandle(peFileHandle);
-		exit(EXIT_FAILURE);
-	}
+  DWORD importDescriptorsCount = 0;
+  PIMAGE_IMPORT_DESCRIPTOR importDescriptorEntry = (PIMAGE_IMPORT_DESCRIPTOR)((BYTE*)peFileContent + rawOffsetToImportTable);
+  while (true)
+  {
+    if (importDescriptorEntry[importDescriptorsCount].OriginalFirstThunk == 0 && importDescriptorEntry[importDescriptorsCount].FirstThunk == 0)
+    {
+      // cout << "last offset: " << offset << endl;
+      break;
+    }
+    importDescriptorsCount += 1;
+  }
 
-	IMAGE_FILE_HEADER peFileHeader = { 0 };
-	if (!ReadFile(peFileHandle, &peFileHeader, sizeof(IMAGE_FILE_HEADER), &bytesWritten, NULL))
-	{
-		cerr << "Error reading IMAGE_FILE_HEADER: " << GetLastError() << endl;
-		CloseHandle(peFileHandle);
-		exit(EXIT_FAILURE);
-	}
+  cout << "Import Descriptors count: " << dec << importDescriptorsCount << endl;
+  cout << "function address: " << hex << importDescriptorEntry->OriginalFirstThunk - sectionOfImportTableRVA + rawDataPointerImportTableSection << endl;
 
-	if (peFileHeader.Machine == IMAGE_FILE_MACHINE_AMD64)
-	{
-		cout << "64-bit pe file" << endl;
-		IMAGE_OPTIONAL_HEADER64 peFileOptionalHeader = { 0 }; // if sizeofoptionalheader -- !
-		if (!ReadFile(peFileHandle, &peFileOptionalHeader, sizeof(IMAGE_OPTIONAL_HEADER), &bytesWritten, NULL))
-		{
-			cerr << "Error reading IMAGE_OPTIONAL_HEADER: " << GetLastError() << endl;
-			CloseHandle(peFileHandle);
-			exit(EXIT_FAILURE);
-		}
+  for (size_t i = 0; i < importDescriptorsCount; i++)
+  {
+    LPBYTE libName = (LPBYTE)((LPBYTE)peFileContent + importDescriptorEntry[i].Name - sectionOfImportTableRVA + rawDataPointerImportTableSection);
+    cout << libName << endl;
+    ULONGLONG* funcAddress = (ULONGLONG*)((BYTE*)peFileContent + (importDescriptorEntry + i)->OriginalFirstThunk - sectionOfImportTableRVA + rawDataPointerImportTableSection);
 
-		IMAGE_NT_HEADERS64 peFileNTHeaders = { 0 };
-		peFileNTHeaders.Signature = peFileSignature;
-		peFileNTHeaders.FileHeader = peFileHeader;
-		peFileNTHeaders.OptionalHeader = peFileOptionalHeader;
-#ifdef PRINT_INFO
-		printInfoNTHeaders64(&peFileNTHeaders);
-#endif
-		printf("VA of import table: %llX\n", peFileOptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress);
-	}
-	else if (peFileHeader.Machine == IMAGE_FILE_MACHINE_I386)
-	{
-		cout << "32-bit pe file" << endl;
-	}
-	else
-	{
-		cout << "Another pe file" << endl;
-	}
+    DWORD functionIndex = 0;
+    while (*(funcAddress + functionIndex))
+    {
+      if (*(funcAddress + functionIndex) & IMAGE_ORDINAL_FLAG)
+      {
+        cout << "\t" << functionIndex + 1 << " Ordinal" << endl;
+        functionIndex += 1;
+        continue;
+      }
+      PIMAGE_IMPORT_BY_NAME functionName = (PIMAGE_IMPORT_BY_NAME)((BYTE*)peFileContent + *(funcAddress + functionIndex) - sectionOfImportTableRVA + rawDataPointerImportTableSection);
+      cout << dec << "\t" << functionIndex + 1 << " Name: " << functionName->Name << endl;
+      functionIndex += 1;
+    }
+  }
 
-#ifdef PRINT_INFO
-	cout << "Debug mode" << endl;
-	printInfoDosHeader(&dosHeader);
-#endif
-
-	cout << "Header closed: " << CloseHandle(peFileHandle) << endl;
-	return EXIT_SUCCESS;
+  UnmapViewOfFile(peFileContent);
+  CloseHandle(hPeFileMapping);
+  CloseHandle(hPeFile);
 }
+
+/*
+PEFile* Open_and_Map_File(PEFile *file, const LPBYTE filePath)
+{
+  if (file == nullptr || filePath == nullptr) {
+    return FileError::InvalidArguments;
+  }
+
+  // Opening a file and mapping data
+  // ...
+  if ( file open fails ) {
+    return FileError::FileOpenError;
+  }
+
+  if ( mapping fails ) {
+    return FileError::MappingError;
+  }
+
+  return FileError::Success;
+}
+
+enum class FileError {
+    Success,
+    InvalidArguments,
+    FileOpenError,
+    MappingError
+};
+*/
