@@ -19,7 +19,7 @@ int main()
 {
   // Section 1 remarks
   // Take path to file from command line arguments
-  const char* filePath = "./peparser.dll";
+  const char* filePath = "./cmmon32.exe";
 
   // Section 2 remarks
   // Add error handling with enum
@@ -32,15 +32,139 @@ int main()
 
   // Section 3 remarks
   // Use NT_HEADERS
-  // PIMAGE_NT_HEADERS64 lpPeFileNTHeaders64 = nullptr;
-  // PIMAGE_NT_HEADERS32 lpPeFileNTHeaders32 = nullptr;
-  // BOOLEAN isPEFile64Bit = false;
+  PIMAGE_NT_HEADERS64 lpPeFileNTHeaders64 = nullptr;
+  PIMAGE_NT_HEADERS32 lpPeFileNTHeaders32 = nullptr;
+  bool isPEFile64Bit = false;
 
   PIMAGE_DOS_HEADER peFileDOSHeader = (PIMAGE_DOS_HEADER)peFileContent;
-  PIMAGE_FILE_HEADER peFileHeader = (PIMAGE_FILE_HEADER)((LPBYTE)peFileContent + peFileDOSHeader->e_lfanew + sizeof(DWORD));
-  PIMAGE_OPTIONAL_HEADER64 peFileOptionalHeader = (PIMAGE_OPTIONAL_HEADER64)((LPBYTE)peFileHeader + sizeof(IMAGE_FILE_HEADER));
-  PIMAGE_SECTION_HEADER peFileSectionHeaders = (PIMAGE_SECTION_HEADER)((LPBYTE)peFileOptionalHeader + peFileHeader->SizeOfOptionalHeader);
+  
+  lpPeFileNTHeaders64 = (PIMAGE_NT_HEADERS64) ((LPBYTE) peFileContent + peFileDOSHeader->e_lfanew);
+  
+  if (lpPeFileNTHeaders64->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64 && lpPeFileNTHeaders64->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+  {
+    // 64 bit
+    PIMAGE_SECTION_HEADER peFileSectionHeaders = (PIMAGE_SECTION_HEADER) ((LPBYTE) &lpPeFileNTHeaders64->OptionalHeader + lpPeFileNTHeaders64->FileHeader.SizeOfOptionalHeader);
+    // cout << hex << peFileSectionHeaders->VirtualAddress << endl;
+    // cout << hex << peFileSectionHeaders->Name << endl;
+    DWORD importTableVirtualAddress = lpPeFileNTHeaders64->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
+    WORD importTableSectionIndex = 0;
+    for (WORD i = 0; i < lpPeFileNTHeaders64->FileHeader.NumberOfSections; i++)
+    {
+      PIMAGE_SECTION_HEADER sectionHeader = &peFileSectionHeaders[i];
 
+      if (importTableVirtualAddress > sectionHeader->VirtualAddress && importTableVirtualAddress < sectionHeader->VirtualAddress + sectionHeader->Misc.VirtualSize)
+      {
+        importTableSectionIndex = i;
+      }
+    }
+
+    cout << "Import table is located in " << peFileSectionHeaders[importTableSectionIndex].Name << " section" << endl;
+
+    DWORD importTableRVA = lpPeFileNTHeaders64->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
+    DWORD sectionOfImportTableRVA = peFileSectionHeaders[importTableSectionIndex].VirtualAddress;
+    DWORD rawDataPointerImportTableSection = peFileSectionHeaders[importTableSectionIndex].PointerToRawData;
+
+    DWORD rawOffsetToImportTable = importTableRVA - sectionOfImportTableRVA + rawDataPointerImportTableSection;
+
+    DWORD importDescriptorsCount = 0;
+    PIMAGE_IMPORT_DESCRIPTOR importDescriptorEntry = (PIMAGE_IMPORT_DESCRIPTOR) ((LPBYTE) peFileContent + rawOffsetToImportTable);
+    while (!(importDescriptorEntry[importDescriptorsCount].OriginalFirstThunk == 0 && importDescriptorEntry[importDescriptorsCount].FirstThunk == 0))
+    {
+      importDescriptorsCount += 1;
+    }
+
+    cout << "Import Descriptors count: " << dec << importDescriptorsCount << endl;
+
+    for (size_t i = 0; i < importDescriptorsCount; i++)
+    {
+      LPBYTE libName = (LPBYTE) ((LPBYTE) peFileContent + importDescriptorEntry[i].Name - sectionOfImportTableRVA + rawDataPointerImportTableSection);
+      cout << libName << endl;
+      ULONGLONG* funcAddress = (ULONGLONG*) ((LPBYTE) peFileContent + (importDescriptorEntry + i)->OriginalFirstThunk - sectionOfImportTableRVA + rawDataPointerImportTableSection);
+
+      DWORD functionIndex = 0;
+      while (*(funcAddress + functionIndex))
+      {
+        if (*(funcAddress + functionIndex) & IMAGE_ORDINAL_FLAG)
+        {
+          cout << "\t" << functionIndex + 1 << " " << hex << *(funcAddress + functionIndex) << endl;
+          functionIndex += 1;
+          continue;
+        }
+        PIMAGE_IMPORT_BY_NAME functionName = (PIMAGE_IMPORT_BY_NAME) ((LPBYTE) peFileContent + *(funcAddress + functionIndex) - sectionOfImportTableRVA + rawDataPointerImportTableSection);
+        cout << dec << "\t" << functionIndex + 1 << " Name: " << functionName->Name << endl;
+        functionIndex += 1;
+      }
+    }
+  }
+
+  lpPeFileNTHeaders64 = nullptr;
+  lpPeFileNTHeaders32 = (PIMAGE_NT_HEADERS32) ((LPBYTE) peFileContent + peFileDOSHeader->e_lfanew);
+  
+  if (lpPeFileNTHeaders32->FileHeader.Machine == IMAGE_FILE_MACHINE_I386 && lpPeFileNTHeaders32->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC)
+  {
+    // 32 bit
+    PIMAGE_SECTION_HEADER peFileSectionHeaders = (PIMAGE_SECTION_HEADER) ((LPBYTE) &lpPeFileNTHeaders32->OptionalHeader + lpPeFileNTHeaders32->FileHeader.SizeOfOptionalHeader);
+    DWORD importTableVirtualAddress = lpPeFileNTHeaders32->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
+    WORD importTableSectionIndex = 0;
+    for (WORD i = 0; i < lpPeFileNTHeaders32->FileHeader.NumberOfSections; i++)
+    {
+      PIMAGE_SECTION_HEADER sectionHeader = &peFileSectionHeaders[i];
+
+      if (importTableVirtualAddress > sectionHeader->VirtualAddress && importTableVirtualAddress < sectionHeader->VirtualAddress + sectionHeader->Misc.VirtualSize)
+      {
+        importTableSectionIndex = i;
+      }
+    }
+
+    cout << "Import table is located in " << peFileSectionHeaders[importTableSectionIndex].Name << " section" << endl;
+
+    DWORD importTableRVA = lpPeFileNTHeaders32->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
+    DWORD sectionOfImportTableRVA = peFileSectionHeaders[importTableSectionIndex].VirtualAddress;
+    DWORD rawDataPointerImportTableSection = peFileSectionHeaders[importTableSectionIndex].PointerToRawData;
+
+    DWORD rawOffsetToImportTable = importTableRVA - sectionOfImportTableRVA + rawDataPointerImportTableSection;
+
+    DWORD importDescriptorsCount = 0;
+    PIMAGE_IMPORT_DESCRIPTOR importDescriptorEntry = (PIMAGE_IMPORT_DESCRIPTOR) ((LPBYTE) peFileContent + rawOffsetToImportTable);
+    while (!(importDescriptorEntry[importDescriptorsCount].OriginalFirstThunk == 0 && importDescriptorEntry[importDescriptorsCount].FirstThunk == 0))
+    {
+      importDescriptorsCount += 1;
+    }
+
+    cout << "Import Descriptors count: " << dec << importDescriptorsCount << endl;
+  
+    for (size_t i = 0; i < importDescriptorsCount; i++)
+    {
+      LPBYTE libName = (LPBYTE) ((LPBYTE) peFileContent + importDescriptorEntry[i].Name - sectionOfImportTableRVA + rawDataPointerImportTableSection);
+      cout << libName << endl;
+      DWORD* funcAddress = (DWORD*) ((LPBYTE) peFileContent + (importDescriptorEntry + i)->OriginalFirstThunk - sectionOfImportTableRVA + rawDataPointerImportTableSection);
+
+      DWORD functionIndex = 0;
+      while (*(funcAddress + functionIndex))
+      {
+        if (*(funcAddress + functionIndex) & IMAGE_ORDINAL_FLAG)
+        {
+          cout << "\t" << functionIndex + 1 << " " << hex << *(funcAddress + functionIndex) << endl;
+          functionIndex += 1;
+          continue;
+        }
+        PIMAGE_IMPORT_BY_NAME functionName = (PIMAGE_IMPORT_BY_NAME) ((LPBYTE) peFileContent + *(funcAddress + functionIndex) - sectionOfImportTableRVA + rawDataPointerImportTableSection);
+        cout << dec << "\t" << functionIndex + 1 << " Name: " << functionName->Name << endl;
+        functionIndex += 1;
+      }
+    }
+
+  }
+  else
+  {
+    // another
+  }
+  
+  // PIMAGE_FILE_HEADER peFileHeader = (PIMAGE_FILE_HEADER)((LPBYTE)peFileContent + peFileDOSHeader->e_lfanew + sizeof(DWORD));
+  // PIMAGE_OPTIONAL_HEADER64 peFileOptionalHeader = (PIMAGE_OPTIONAL_HEADER64)((LPBYTE)peFileHeader + sizeof(IMAGE_FILE_HEADER));
+  // PIMAGE_SECTION_HEADER peFileSectionHeaders = (PIMAGE_SECTION_HEADER)((LPBYTE)peFileOptionalHeader + peFileHeader->SizeOfOptionalHeader);
+
+  /*
   DWORD importTableVirtualAddress = peFileOptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress; // temp
   WORD importTableSectionIndex = 0;
   for (WORD i = 0; i < peFileHeader->NumberOfSections; i++)
@@ -76,7 +200,7 @@ int main()
      ((ntheader))->FileHeader.SizeOfOptionalHeader   \
     ))
 
-  */
+  
   cout << "Import Descriptors count: " << dec << importDescriptorsCount << endl;
 
   for (size_t i = 0; i < importDescriptorsCount; i++)
@@ -99,7 +223,7 @@ int main()
       functionIndex += 1;
     }
   }
-
+  */
   UnmapViewOfFile(peFileContent);
   CloseHandle(hPeFileMapping);
   CloseHandle(hPeFile);
